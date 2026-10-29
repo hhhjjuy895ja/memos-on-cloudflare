@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { LocalFile } from "../types/attachment";
 import { useBlobUrls } from "./useBlobUrls";
 
@@ -50,6 +50,7 @@ function createRecordedFile(blob: Blob, mimeType: string): File {
 }
 
 export const useAudioRecorder = (actions: AudioRecorderActions) => {
+  const actionsRef = useRef(actions);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const [recordingStream, setRecordingStream] = useState<MediaStream | null>(null);
@@ -61,26 +62,30 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
   const startRequestIdRef = useRef(0);
   const { createBlobUrl } = useBlobUrls();
 
-  const cleanupTimer = () => {
+  useLayoutEffect(() => {
+    actionsRef.current = actions;
+  }, [actions]);
+
+  const cleanupTimer = useCallback(() => {
     if (elapsedTimerRef.current !== null) {
       window.clearInterval(elapsedTimerRef.current);
       elapsedTimerRef.current = null;
     }
-  };
+  }, []);
 
-  const cleanupStream = () => {
+  const cleanupStream = useCallback(() => {
     mediaStreamRef.current?.getTracks().forEach((track) => track.stop());
     mediaStreamRef.current = null;
     setRecordingStream(null);
-  };
+  }, []);
 
-  const resetRecorderRefs = () => {
+  const resetRecorderRefs = useCallback(() => {
     cleanupTimer();
     cleanupStream();
     mediaRecorderRef.current = null;
     chunksRef.current = [];
     startedAtRef.current = null;
-  };
+  }, [cleanupTimer, cleanupStream]);
 
   useEffect(() => {
     const isSupported =
@@ -89,20 +94,21 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
       typeof navigator.mediaDevices?.getUserMedia === "function" &&
       typeof MediaRecorder !== "undefined";
 
-    actions.setAudioRecorderSupport(isSupported);
+    actionsRef.current.setAudioRecorderSupport(isSupported);
     if (!isSupported) {
-      actions.setAudioRecorderStatus("unsupported");
-      actions.setAudioRecorderError("Audio recording is not supported in this browser.");
+      actionsRef.current.setAudioRecorderStatus("unsupported");
+      actionsRef.current.setAudioRecorderError("Audio recording is not supported in this browser.");
       return;
     }
 
-    actions.setAudioRecorderStatus("idle");
-    actions.setAudioRecorderError(undefined);
+    actionsRef.current.setAudioRecorderStatus("idle");
+    actionsRef.current.setAudioRecorderError(undefined);
 
     return () => {
+      startRequestIdRef.current += 1;
       resetRecorderRefs();
     };
-  }, [actions]);
+  }, [resetRecorderRefs]);
 
   const startRecording = async () => {
     const requestId = startRequestIdRef.current + 1;
@@ -113,15 +119,15 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
       typeof navigator.mediaDevices?.getUserMedia !== "function" ||
       typeof MediaRecorder === "undefined"
     ) {
-      actions.setAudioRecorderSupport(false);
-      actions.setAudioRecorderStatus("unsupported");
-      actions.setAudioRecorderError("Audio recording is not supported in this browser.");
+      actionsRef.current.setAudioRecorderSupport(false);
+      actionsRef.current.setAudioRecorderStatus("unsupported");
+      actionsRef.current.setAudioRecorderError("Audio recording is not supported in this browser.");
       return;
     }
 
-    actions.setAudioRecorderError(undefined);
-    actions.setAudioRecorderStatus("requesting_permission");
-    actions.setAudioRecorderElapsed(0);
+    actionsRef.current.setAudioRecorderError(undefined);
+    actionsRef.current.setAudioRecorderStatus("requesting_permission");
+    actionsRef.current.setAudioRecorderElapsed(0);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -159,10 +165,10 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
         const completionMode = completionModeRef.current;
         completionModeRef.current = "attach";
         if (blob.size === 0) {
-          actions.setAudioRecorderElapsed(0);
-          actions.setAudioRecorderError(undefined);
-          actions.setAudioRecorderStatus("idle");
-          actions.onRecordingEmpty?.(completionMode);
+          actionsRef.current.setAudioRecorderElapsed(0);
+          actionsRef.current.setAudioRecorderError(undefined);
+          actionsRef.current.setAudioRecorderStatus("idle");
+          actionsRef.current.onRecordingEmpty?.(completionMode);
           resetRecorderRefs();
           return;
         }
@@ -170,7 +176,7 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
         const file = createRecordedFile(blob, recorderMimeTypeRef.current);
         const previewUrl = createBlobUrl(file);
 
-        actions.onRecordingComplete(
+        actionsRef.current.onRecordingComplete(
           {
             file,
             previewUrl,
@@ -181,20 +187,20 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
           },
           completionMode,
         );
-        actions.setAudioRecorderElapsed(0);
-        actions.setAudioRecorderError(undefined);
-        actions.setAudioRecorderStatus("idle");
+        actionsRef.current.setAudioRecorderElapsed(0);
+        actionsRef.current.setAudioRecorderError(undefined);
+        actionsRef.current.setAudioRecorderStatus("idle");
         resetRecorderRefs();
       });
 
       mediaRecorder.start();
       startedAtRef.current = Date.now();
-      actions.setAudioRecorderPermission("granted");
-      actions.setAudioRecorderStatus("recording");
+      actionsRef.current.setAudioRecorderPermission("granted");
+      actionsRef.current.setAudioRecorderStatus("recording");
 
       elapsedTimerRef.current = window.setInterval(() => {
         if (startedAtRef.current) {
-          actions.setAudioRecorderElapsed(Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000)));
+          actionsRef.current.setAudioRecorderElapsed(Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000)));
         }
       }, 250);
     } catch (error) {
@@ -205,9 +211,9 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
       const permissionDenied =
         error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "PermissionDeniedError");
 
-      actions.setAudioRecorderPermission(permissionDenied ? "denied" : "unknown");
-      actions.setAudioRecorderStatus("error");
-      actions.setAudioRecorderError(permissionDenied ? "Microphone permission was denied." : "Failed to start audio recording.");
+      actionsRef.current.setAudioRecorderPermission(permissionDenied ? "denied" : "unknown");
+      actionsRef.current.setAudioRecorderStatus("error");
+      actionsRef.current.setAudioRecorderError(permissionDenied ? "Microphone permission was denied." : "Failed to start audio recording.");
       resetRecorderRefs();
     }
   };
@@ -227,9 +233,9 @@ export const useAudioRecorder = (actions: AudioRecorderActions) => {
     startRequestIdRef.current += 1;
     completionModeRef.current = "attach";
     resetRecorderRefs();
-    actions.setAudioRecorderElapsed(0);
-    actions.setAudioRecorderError(undefined);
-    actions.setAudioRecorderStatus("idle");
+    actionsRef.current.setAudioRecorderElapsed(0);
+    actionsRef.current.setAudioRecorderError(undefined);
+    actionsRef.current.setAudioRecorderStatus("idle");
   };
 
   return {
